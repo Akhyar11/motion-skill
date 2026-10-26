@@ -41,7 +41,8 @@ def split_into_paragraphs(text: str, max_chars: int = 150):
     return chunks
 
 def generate_cloned_voice(text: str, out_path: str, voice_path: str = DEFAULT_VOICE,
-                          config_path: str = DEFAULT_CONFIG):
+                          config_path: str = DEFAULT_CONFIG, max_tokens: int = 80,
+                          frames_after_eos: int = 12, gap: float = 0.22):
     if not os.path.exists(config_path):
         print(f"Error: Config model tidak ditemukan di: {config_path}", file=sys.stderr)
         return False
@@ -58,6 +59,7 @@ def generate_cloned_voice(text: str, out_path: str, voice_path: str = DEFAULT_VO
     print(f"  Sampel Suara : {voice_path}")
     print(f"  Total Kalimat: {total} bagian naskah")
     print(f"  Output       : {out_path}")
+    print(f"  max_tokens / frames_after_eos / gap : {max_tokens} / {frames_after_eos} / {gap:.2f}s")
     print("="*50 + "\n")
 
     print("[1/3] Memuat model bahasa Indonesia ke memori...")
@@ -70,12 +72,17 @@ def generate_cloned_voice(text: str, out_path: str, voice_path: str = DEFAULT_VO
     print("[3/3] Mengenerate audio narasi...")
     audio_tensors = []
     
-    # Tambahkan hening kecil (0.3s) antar kalimat
-    silence = torch.zeros((1, int(model.sample_rate * 0.3)), dtype=torch.float32)
+    # Tambahkan hening kecil antar kalimat
+    silence = torch.zeros(int(model.sample_rate * gap), dtype=torch.float32)
 
     for idx, chunk in enumerate(chunks, 1):
         print(f"  [{idx}/{total}] \"{chunk[:45]}...\"")
-        chunk_audio = model.generate_audio(voice_state, chunk, copy_state=True)
+        chunk_audio = model.generate_audio(
+            voice_state, chunk, max_tokens=max_tokens,
+            frames_after_eos=frames_after_eos, copy_state=True
+        )
+        # Pocket-TTS dapat mengembalikan (N,) atau (1,N); ratakan agar concat konsisten.
+        chunk_audio = chunk_audio.reshape(-1)
         audio_tensors.append(chunk_audio)
         if idx < total:
             audio_tensors.append(silence)
@@ -98,6 +105,9 @@ def main():
     parser.add_argument("-o", "--out", default="assets/audio/narasi_kloning.wav", help="Path file output (.wav)")
     parser.add_argument("-v", "--voice", default=DEFAULT_VOICE, help="Path audio master suara Anda (.wav)")
     parser.add_argument("-c", "--config", default=DEFAULT_CONFIG, help="Path config model")
+    parser.add_argument("--max-tokens", type=int, default=80, help="Token teks maksimum per potongan (default 80)")
+    parser.add_argument("--frames-after-eos", type=int, default=12, help="Frame tambahan setelah EOS (default 12)")
+    parser.add_argument("--gap", type=float, default=0.22, help="Jeda antar potongan dalam detik (default 0.22)")
 
     args = parser.parse_args()
 
@@ -118,7 +128,10 @@ def main():
         text=content,
         out_path=args.out,
         voice_path=args.voice,
-        config_path=args.config
+        config_path=args.config,
+        max_tokens=args.max_tokens,
+        frames_after_eos=args.frames_after_eos,
+        gap=args.gap
     )
     sys.exit(0 if success else 1)
 
